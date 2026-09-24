@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portal de Relatórios | Éllu Ambiental</title>
+  <meta name="description" content="Portal do cliente para acesso e validação de relatórios de ensaio da Éllu Ambiental.">
+  <meta name="theme-color" content="#0b4f8a">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app"><div class="loading" style="font-family:sans-serif;padding:40px;text-align:center">Carregando portal…</div></div>
+  <script>
+    // Mostra erros na tela (diagnóstico)
+    window.addEventListener('error', function (e) {
+      var d = document.getElementById('app');
+      if (d) d.insertAdjacentHTML('beforeend', '<div style="font-family:sans-serif;margin:20px;padding:12px;background:#fbeaea;color:#c0392b;border-radius:8px">Erro: ' + (e.message || (e.target && e.target.src) || 'falha ao carregar arquivo') + '</div>');
+    }, true);
+  </script>
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="config.js"></script>
+  <script>
+    if (!window.PORTAL_CONFIG) document.getElementById('app').innerHTML = '<p style="font-family:sans-serif;padding:40px;color:#c0392b">Arquivo config.js não encontrado. Os arquivos index.html, app.js, config.js e style.css precisam estar na mesma pasta.</p>';
+    else if (window.PORTAL_CONFIG.SUPABASE_URL && !window.supabase) document.getElementById('app').innerHTML = '<p style="font-family:sans-serif;padding:40px;color:#c0392b">Não foi possível carregar a biblioteca do Supabase (cdn.jsdelivr.net). Verifique a internet ou se a rede da empresa bloqueia esse endereço.</p>';
+  </script>
+  <script src="app.js" onerror="document.getElementById('app').innerHTML='<p style=&quot;font-family:sans-serif;padding:40px;color:#c0392b&quot;>Arquivo app.js não encontrado na pasta.</p>'"></script>
+</body>
+</html>

@@ -368,7 +368,7 @@ const API = DEMO ? DemoAPI() : SupaAPI();
    --------------------------------------------------------------------- */
 const S = {
   perfil: null, relatorios: [], clientes: [], perfis: [],
-  filtros: { q: '', ano: '', matriz: '', status: 'vigente', cliente: '' },
+  filtros: { q: '', ano: '', projeto: '', status: 'vigente', cliente: '' },
   sort: { k: 'data_emissao', dir: -1 }, pagina: 1, sel: new Set(), aba: 'relatorios', statusU: null,
 };
 const isAdmin = () => S.perfil?.papel === 'admin';
@@ -535,7 +535,6 @@ function viewValidar(codigoInicial = '') {
     res.innerHTML = `<div class="valid-res ${cls}"><h3>${tit}</h3><dl>
       <dt>Relatório</dt><dd>${esc(r.numero)} — Rev. ${r.revisao}</dd>
       <dt>Cliente</dt><dd>${esc(r.cliente)}</dd>
-      <dt>Data da coleta</dt><dd>${fmtData(r.data_coleta)}</dd>
       <dt>Data de emissão</dt><dd>${fmtData(r.data_emissao)}</dd>
       <dt>Arquivos</dt><dd>${(r.arquivos || []).map(a => `<div style="margin-bottom:6px">${esc(a.nome)}<br><span class="codigo" style="font-size:10px">${esc(a.hash)}</span></div>`).join('') || '—'}</dd></dl>
       ${origem === 'hash' ? `<p style="margin:10px 0 0;font-size:13px">O arquivo <b>${esc(r.arquivo || '')}</b> é idêntico ao emitido pelo laboratório.</p>` : ''}</div>`;
@@ -611,7 +610,7 @@ function filtrados() {
   let l = S.relatorios.filter(r =>
     (f.status === 'todos' || r.status === f.status) &&
     (!f.ano || (r.data_emissao || '').startsWith(f.ano)) &&
-    (!f.matriz || r.matriz === f.matriz) &&
+    (!f.projeto || r.projeto === f.projeto) &&
     (!f.cliente || r.cliente_id === f.cliente) &&
     (!q || norm([r.numero, r.titulo, r.projeto, r.ponto_coleta, r.matriz, r.cliente?.nome, r.codigo_validacao].join(' ')).includes(q)));
   const { k, dir } = S.sort;
@@ -621,14 +620,14 @@ function filtrados() {
 
 function toolbarHtml() {
   const anos = [...new Set(S.relatorios.map(r => (r.data_emissao || '').slice(0, 4)).filter(Boolean))].sort().reverse();
-  const matrizes = [...new Set(S.relatorios.map(r => r.matriz).filter(Boolean))].sort();
+  const projetos = [...new Set(S.relatorios.map(r => r.projeto).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
   const f = S.filtros;
   const opt = (v, t, sel) => `<option value="${esc(v)}"${v === sel ? ' selected' : ''}>${esc(t)}</option>`;
   return `<div class="toolbar">
-    <div class="busca">${ic('search')}<input class="in" id="f-q" placeholder="Buscar por nº, projeto, ponto, matriz${isAdmin() ? ', cliente' : ''}…" value="${esc(f.q)}"></div>
+    <div class="busca">${ic('search')}<input class="in" id="f-q" placeholder="Buscar por nº, projeto${isAdmin() ? ', cliente' : ''} ou código…" value="${esc(f.q)}"></div>
     ${isAdmin() ? `<select class="in" id="f-cliente">${opt('', 'Todos os clientes', f.cliente)}${S.clientes.map(c => opt(c.id, c.nome, f.cliente)).join('')}</select>` : ''}
     <select class="in" id="f-ano">${opt('', 'Todos os anos', f.ano)}${anos.map(a => opt(a, a, f.ano)).join('')}</select>
-    <select class="in" id="f-matriz">${opt('', 'Todas as matrizes', f.matriz)}${matrizes.map(m => opt(m, m, f.matriz)).join('')}</select>
+    <select class="in" id="f-projeto" style="max-width:260px">${opt('', 'Todos os projetos', f.projeto)}${projetos.map(m => opt(m, m, f.projeto)).join('')}</select>
     <select class="in" id="f-status">${opt('vigente', 'Vigentes', f.status)}${opt('substituido', 'Substituídos', f.status)}${isAdmin() ? opt('cancelado', 'Cancelados', f.status) : ''}${opt('todos', 'Todos os status', f.status)}</select>
   </div><div id="sel-bar"></div><div id="lista"></div>`;
 }
@@ -636,7 +635,7 @@ function toolbarHtml() {
 function ligarToolbar() {
   let t;
   $('#f-q').oninput = e => { clearTimeout(t); t = setTimeout(() => { S.filtros.q = e.target.value; S.pagina = 1; renderLista(); }, 180); };
-  ['cliente', 'ano', 'matriz', 'status'].forEach(k => {
+  ['cliente', 'ano', 'projeto', 'status'].forEach(k => {
     const el = $('#f-' + k); if (el) el.onchange = () => { S.filtros[k] = el.value; S.pagina = 1; renderLista(); };
   });
 }
@@ -657,15 +656,12 @@ function renderLista() {
     ? `<div class="vazio">${ic('file')}<div>${S.relatorios.length ? 'Nenhum relatório encontrado com esses filtros.' : 'Ainda não há relatórios disponíveis.'}</div></div>`
     : `<div class="tb-wrap"><table class="tb resp"><thead><tr>
         <th style="width:32px"><input type="checkbox" id="ck-all"${todosSel ? ' checked' : ''} aria-label="Selecionar página"></th>
-        ${th('numero', 'Relatório')}${adm ? th('cliente_id', 'Cliente') : ''}${th('projeto', 'Projeto / Ponto')}${th('matriz', 'Matriz')}
-        ${th('data_coleta', 'Coleta')}${th('data_emissao', 'Emissão')}<th>Status</th><th></th></tr></thead><tbody>
+        ${th('numero', 'Relatório')}${adm ? th('cliente_id', 'Cliente') : ''}${th('projeto', 'Projeto')}${th('data_emissao', 'Emissão')}<th>Status</th><th></th></tr></thead><tbody>
       ${pag.map(r => `<tr data-id="${r.id}">
         <td class="ck"><input type="checkbox" class="ck-r"${S.sel.has(r.id) ? ' checked' : ''} aria-label="Selecionar"></td>
-        <td data-l="Relatório"><div class="num">${esc(r.numero)}</div><div class="sub">Rev. ${r.revisao}${r.titulo ? ' · ' + esc(r.titulo) : ''}${r.arquivos.length > 1 ? ` · <span title="Arquivos">${ic('clip', 'i i-sm')}${r.arquivos.length}</span>` : ''}</div></td>
+        <td data-l="Relatório"><div class="num">${esc(r.numero)}</div><div class="sub">Rev. ${r.revisao}${r.arquivos.length > 1 ? ` · <span title="Arquivos">${ic('clip', 'i i-sm')}${r.arquivos.length}</span>` : ''}</div></td>
         ${adm ? `<td data-l="Cliente">${esc(r.cliente?.nome || '—')}</td>` : ''}
-        <td data-l="Projeto / Ponto"><div>${esc(r.projeto || '—')}</div><div class="sub">${esc(r.ponto_coleta || '')}</div></td>
-        <td data-l="Matriz">${esc(r.matriz || '—')}</td>
-        <td data-l="Coleta">${fmtData(r.data_coleta)}</td>
+        <td data-l="Projeto">${esc(r.projeto || '—')}</td>
         <td data-l="Emissão">${fmtData(r.data_emissao)}</td>
         <td data-l="Status">${statusBadge(r.status)}</td>
         <td class="acoes">
@@ -795,9 +791,7 @@ function modalInfo(r, titulo = 'Detalhes do relatório') {
     <div class="valid-res" style="background:#fafbfc;border:1px solid var(--borda)"><dl>
       <dt>Relatório</dt><dd>${esc(r.numero)} — Rev. ${r.revisao} ${statusBadge(r.status)}</dd>
       ${isAdmin() ? `<dt>Cliente</dt><dd>${esc(r.cliente?.nome || '')}</dd>` : ''}
-      <dt>Título</dt><dd>${esc(r.titulo || '—')}</dd><dt>Projeto</dt><dd>${esc(r.projeto || '—')}</dd>
-      <dt>Ponto</dt><dd>${esc(r.ponto_coleta || '—')}</dd><dt>Matriz</dt><dd>${esc(r.matriz || '—')}</dd>
-      <dt>Coleta</dt><dd>${fmtData(r.data_coleta)}</dd><dt>Emissão</dt><dd>${fmtData(r.data_emissao)}</dd>
+      <dt>Projeto</dt><dd>${esc(r.projeto || '—')}</dd><dt>Emissão</dt><dd>${fmtData(r.data_emissao)}</dd>
       ${r.motivo_revisao ? `<dt>Motivo da revisão</dt><dd>${esc(r.motivo_revisao)}</dd>` : ''}</dl></div>
     <div><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <b>Arquivos (${r.arquivos.length})</b>
@@ -981,14 +975,8 @@ function modalPublicar(base = null) {
         <label class="f">Nº do relatório<input class="in" name="numero" required value="${v('numero')}"${base ? ' readonly' : ''} placeholder="RE-${new Date().getFullYear()}-0001"></label>
         <label class="f">Revisão<input class="in" type="number" min="0" name="revisao" required value="${base ? revAtual + 1 : 0}"></label>
       </div>
-      <label class="f">Título <span class="opt">(opcional)</span><input class="in" name="titulo" value="${v('titulo', 'Relatório de Ensaio')}"></label>
       <div class="grid2">
-        <label class="f">Projeto / campanha <span class="opt">(opcional)</span><input class="in" name="projeto" value="${v('projeto')}" list="dl-proj"></label>
-        <label class="f">Ponto de coleta <span class="opt">(opcional)</span><input class="in" name="ponto_coleta" value="${v('ponto_coleta')}" list="dl-ponto"></label>
-      </div>
-      <div class="grid3">
-        <label class="f">Matriz<input class="in" name="matriz" value="${v('matriz')}" list="dl-matriz"></label>
-        <label class="f">Data da coleta<input class="in" type="date" name="data_coleta" value="${v('data_coleta')}"></label>
+        <label class="f">Projeto<input class="in" name="projeto" required value="${v('projeto')}" list="dl-proj" placeholder="Ex.: Monitoramento trimestral LO 1234/2025"></label>
         <label class="f">Data de emissão<input class="in" type="date" name="data_emissao" required value="${hoje()}"></label>
       </div>
       <label class="f">Código de validação <span class="opt">(opcional — use se já imprimiu um código no PDF; vazio = gerar automaticamente)</span>
@@ -997,7 +985,7 @@ function modalPublicar(base = null) {
       <div><div style="font-weight:500;font-size:13px;margin-bottom:4px">Arquivos</div>
         <div class="drop" id="drop-pub">${ic('upload')}<div><b>Arraste os arquivos</b> ou clique para selecionar</div><small>PDF, Excel, Word, CSV, imagem ou ZIP · até 50 MB cada · o 1º é o relatório principal</small><input type="file" hidden></div>
         <div class="hist" id="lista-pub" style="margin-top:8px"></div></div>
-      ${['projeto', 'ponto_coleta', 'matriz'].map(k => `<datalist id="dl-${k === 'ponto_coleta' ? 'ponto' : k === 'projeto' ? 'proj' : 'matriz'}">${[...new Set(S.relatorios.map(r => r[k]).filter(Boolean))].map(x => `<option value="${esc(x)}">`).join('')}</datalist>`).join('')}
+      <datalist id="dl-proj">${[...new Set(S.relatorios.map(r => r.projeto).filter(Boolean))].map(x => `<option value="${esc(x)}">`).join('')}</datalist>
     </form>`,
     `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-verde" id="pub">${ic('upload')} Publicar</button>`);
   const f = $('#f-pub', m.el);
@@ -1030,6 +1018,7 @@ function modalPublicar(base = null) {
     if (!cliente_id) return toast('Selecione o cliente.', 'erro');
     if (!numero) return toast('Informe o número do relatório.', 'erro');
     if (isNaN(revisao) || revisao < 0) return toast('Revisão inválida.', 'erro');
+    if (!f.projeto.value.trim()) return toast('Informe o projeto.', 'erro');
     if (!f.data_emissao.value) return toast('Informe a data de emissão.', 'erro');
     if (!itens.length) return toast('Adicione ao menos um arquivo.', 'erro');
     const outroCliente = S.relatorios.find(r => r.numero === numero && r.cliente_id !== cliente_id);
@@ -1038,9 +1027,8 @@ function modalPublicar(base = null) {
     if (ex.length && revisao <= Math.max(...ex.map(r => r.revisao))) return toast('A revisão deve ser maior que a última publicada.', 'erro');
     if (ex.length && !f.motivo_revisao.value.trim()) return toast('Informe o motivo da revisão.', 'erro');
     const meta = {
-      cliente_id, numero, revisao, titulo: f.titulo.value.trim() || null, projeto: f.projeto.value.trim() || null,
-      ponto_coleta: f.ponto_coleta.value.trim() || null, matriz: f.matriz.value.trim() || null,
-      data_coleta: f.data_coleta.value || null, data_emissao: f.data_emissao.value, motivo_revisao: f.motivo_revisao.value.trim() || null,
+      cliente_id, numero, revisao, projeto: f.projeto.value.trim(),
+      data_emissao: f.data_emissao.value, motivo_revisao: f.motivo_revisao.value.trim() || null,
     };
     const codigo = f.codigo_validacao.value.trim().toUpperCase().replace(/\s+/g, '');
     if (codigo) {

@@ -7,6 +7,7 @@ window.PORTAL_CONFIG = {
   EMPRESA: "Éllu Ambiental",
   CONTATO_EMAIL: "relatorios@elluambiental.com.br",
   // URL pública do portal (usada no link/QR de validação). Vazio = usa a URL atual.
-  URL_PUBLICA: "https://viniciusmeier87-tech.github.io/portal-relatorios/",
+  URL_PUBLICA: "https://ellu-ambiental.github.io/portal-relatorios/",
   ITENS_POR_PAGINA: 25,
 };
+ 

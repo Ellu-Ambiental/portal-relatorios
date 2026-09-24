@@ -214,6 +214,38 @@ function SupaAPI() {
     },
     async atualizarRelatorio(id, patch) { ok(await sb.from('relatorios').update(patch).eq('id', id)); },
     async acessos() { return ok(await sb.from('acessos_log').select('*').order('created_at', { ascending: false }).limit(500)); },
+    // ---- documentos gerais (certificados de calibração)
+    async documentos() {
+      const { data, error } = await sb.from('documentos_gerais').select('*').order('categoria').order('equipamento');
+      if (error) { if (/documentos_gerais/.test(error.message)) return []; throw error; }
+      return data;
+    },
+    async logDoc(d, acao) { try { await sb.from('acessos_log').insert({ documento_id: d.id, user_id: await uid(), acao }); } catch (_) {} },
+    async publicarDocumentos(itens) {
+      const out = [];
+      for (const it of itens) {
+        const path = `gerais/${Date.now()}_${safe(it.file.name)}`;
+        ok(await bucket().upload(path, it.file, { contentType: it.file.type || 'application/octet-stream', upsert: false }));
+        const { data, error } = await sb.from('documentos_gerais').insert({ ...it.meta, arquivo_path: path, arquivo_nome: it.file.name,
+          tamanho_bytes: it.file.size, content_type: it.file.type || null, hash_sha256: it.hash, publicado_por: await uid() }).select().single();
+        if (error) { await bucket().remove([path]); throw error; }
+        out.push(data);
+      }
+      return out;
+    },
+    async atualizarDocumento(d, patch, novo) {
+      let extra = {};
+      if (novo) {
+        const path = `gerais/${Date.now()}_${safe(novo.file.name)}`;
+        ok(await bucket().upload(path, novo.file, { contentType: novo.file.type || 'application/octet-stream', upsert: false }));
+        extra = { arquivo_path: path, arquivo_nome: novo.file.name, tamanho_bytes: novo.file.size, content_type: novo.file.type || null, hash_sha256: novo.hash };
+      }
+      const { data, error } = await sb.from('documentos_gerais').update({ ...patch, ...extra }).eq('id', d.id).select().single();
+      if (error) { if (novo) await bucket().remove([extra.arquivo_path]); throw error; }
+      if (novo) await bucket().remove([d.arquivo_path]);
+      return data;
+    },
+    async excluirDocumento(d) { ok(await sb.from('documentos_gerais').delete().eq('id', d.id)); await bucket().remove([d.arquivo_path]); },
   };
 }
 
@@ -286,6 +318,19 @@ function DemoAPI() {
     if (i % 5 === 0) r.arquivos.push(novoArq('Anexo - Laudo de campo.pdf', pdf(txt('LAUDO DE CAMPO')), 2));
   });
   const pronto = Promise.all(rel.flatMap(r => r.arquivos).map(async a => { a.hash_sha256 = await sha256(blobs.get(a.arquivo_path)); }));
+  const somaDias = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+  const docs = [
+    ['Espectrofotômetro UV-VIS — EQ-012', 'CAL-2026-0456', -120, 245], ['Balança analítica — EQ-003', 'RBC-78451/26', -200, 165],
+    ['pHmetro de bancada — EQ-021', 'CAL-2025-1180', -340, 25], ['Termômetro digital — EQ-034', 'RBC-66120/25', -400, -35],
+    ['Condutivímetro — EQ-018', 'CAL-2026-0212', -60, 305],
+  ].map(([equipamento, numero_certificado, cal, val]) => {
+    const b = pdf(`CERTIFICADO DE CALIBRACAO\n\n${equipamento}\nCertificado: ${numero_certificado}\n\n(Documento ficticio - modo demonstracao)`);
+    const d = { id: nid('d'), categoria: 'Certificado de calibração', equipamento, numero_certificado, data_calibracao: somaDias(cal), validade: somaDias(val),
+      arquivo_path: nid('p'), arquivo_nome: `${numero_certificado}.pdf`, tamanho_bytes: b.size, ativo: true, created_at: new Date().toISOString() };
+    blobs.set(d.arquivo_path, b); return d;
+  });
+  docs.push((() => { const b = pdf('ESCOPO DE ACREDITACAO\n\n(Documento ficticio)'); const d = { id: nid('d'), categoria: 'Escopo de acreditação', equipamento: 'Escopo de acreditação ISO/IEC 17025', numero_certificado: 'CRL 0000', data_calibracao: null, validade: null, arquivo_path: nid('p'), arquivo_nome: 'Escopo.pdf', tamanho_bytes: b.size, ativo: true, created_at: new Date().toISOString() }; blobs.set(d.arquivo_path, b); return d; })());
+  const prontoDocs = Promise.all(docs.map(async d => { d.hash_sha256 = await sha256(blobs.get(d.arquivo_path)); }));
   const log = [];
   let atual = null;
   const clone = o => JSON.parse(JSON.stringify(o));
@@ -358,6 +403,18 @@ function DemoAPI() {
     async removerArquivo(a) { rel.forEach(r => { r.arquivos = r.arquivos.filter(x => x.id !== a.id); }); },
     async atualizarRelatorio(id, patch) { Object.assign(rel.find(r => r.id === id), patch); },
     async acessos() { return clone(log); },
+    async documentos() { await prontoDocs; return clone(atual.papel === 'admin' ? docs : docs.filter(d => d.ativo)); },
+    async logDoc(d, acao) { log.unshift({ id: log.length + 1, documento_id: d.id, user_id: atual.id, acao, created_at: new Date().toISOString() }); },
+    async publicarDocumentos(itens) {
+      const novos = itens.map(it => { const d = { id: nid('d'), ...it.meta, ativo: true, arquivo_path: nid('p'), arquivo_nome: it.file.name, tamanho_bytes: it.file.size, hash_sha256: it.hash, created_at: new Date().toISOString() }; blobs.set(d.arquivo_path, it.file); return d; });
+      docs.push(...novos); return clone(novos);
+    },
+    async atualizarDocumento(d, patch, novo) {
+      const alvo = docs.find(x => x.id === d.id); Object.assign(alvo, patch);
+      if (novo) { alvo.arquivo_path = nid('p'); alvo.arquivo_nome = novo.file.name; alvo.tamanho_bytes = novo.file.size; alvo.hash_sha256 = novo.hash; blobs.set(alvo.arquivo_path, novo.file); }
+      return clone(alvo);
+    },
+    async excluirDocumento(d) { docs.splice(docs.findIndex(x => x.id === d.id), 1); },
   };
 }
 
@@ -369,7 +426,7 @@ const API = DEMO ? DemoAPI() : SupaAPI();
 const S = {
   perfil: null, relatorios: [], clientes: [], perfis: [],
   filtros: { q: '', ano: '', projeto: '', status: 'vigente', cliente: '' },
-  sort: { k: 'data_emissao', dir: -1 }, pagina: 1, sel: new Set(), aba: 'relatorios', statusU: null,
+  sort: { k: 'data_emissao', dir: -1 }, pagina: 1, sel: new Set(), aba: 'relatorios', statusU: null, documentos: [], abaCli: 'relatorios', filtroDoc: { q: '', categoria: '' },
 };
 const isAdmin = () => S.perfil?.papel === 'admin';
 const app = () => $('#app');
@@ -378,6 +435,7 @@ const app = () => $('#app');
    Inicialização / roteamento
    --------------------------------------------------------------------- */
 async function iniciar() {
+  await logoPronto;
   const qs = new URLSearchParams(location.search);
   if (qs.has('validar')) return viewValidar(qs.get('validar'));
 
@@ -406,20 +464,24 @@ async function entrar() {
 
 async function sair() {
   await API.logout();
-  Object.assign(S, { perfil: null, relatorios: [], sel: new Set(), pagina: 1 });
+  Object.assign(S, { perfil: null, relatorios: [], documentos: [], sel: new Set(), pagina: 1, statusU: null, abaCli: 'relatorios', aba: 'relatorios',
+    filtroDoc: { q: '', categoria: '' }, filtros: { q: '', ano: '', projeto: '', status: 'vigente', cliente: '' } });
   viewLogin({ ok: 'Você saiu do portal.' });
 }
 
 /* ---------------------------------------------------------------------
    Telas de acesso
    --------------------------------------------------------------------- */
-const logoHtml = `<div class="logo"><span class="marca">ÉLLU <b>AMBIENTAL</b></span></div>`;
+const LOGO = CFG.LOGO || 'logo.png';
+let LOGO_OK = false;
+const logoPronto = new Promise(res => { const i = new Image(); i.onload = () => { LOGO_OK = true; res(); }; i.onerror = () => res(); i.src = LOGO; setTimeout(res, 3000); });
+const logoHtml = () => `<div class="logo">${LOGO_OK ? `<img src="${esc(LOGO)}" alt="Éllu Ambiental" class="logo-login">` : '<span class="marca">ÉLLU <b>AMBIENTAL</b></span>'}</div>`;
 const demoFlag = () => DEMO ? '<div class="demo-flag">Modo demonstração — dados fictícios. Configure o Supabase em <b>config.js</b>.</div>' : '';
 
 function viewLogin({ erro = '', ok = '' } = {}) {
   app().innerHTML = `${demoFlag()}<div class="auth-wrap"><div>
     <div class="auth-card">
-      ${logoHtml}<p class="auth-sub">Portal de Relatórios de Ensaio</p>
+      ${logoHtml()}<p class="auth-sub">Portal de Relatórios de Ensaio</p>
       <form id="f-login" novalidate>
         ${erro ? `<div class="msg erro">${esc(erro)}</div>` : ''}${ok ? `<div class="msg ok">${esc(ok)}</div>` : ''}
         ${DEMO ? `<div class="msg info">Demonstração: entre com <b>cliente@demo.com</b> ou <b>admin@demo.com</b> (qualquer senha).</div>` : ''}
@@ -453,7 +515,7 @@ function viewLogin({ erro = '', ok = '' } = {}) {
 
 function viewEsqueci() {
   app().innerHTML = `${demoFlag()}<div class="auth-wrap"><div class="auth-card">
-    ${logoHtml}<p class="auth-sub">Recuperar senha</p>
+    ${logoHtml()}<p class="auth-sub">Recuperar senha</p>
     <form id="f-rec"><p style="margin:0;color:var(--muted)">Informe seu e-mail. Enviaremos um link para você criar uma nova senha.</p>
       <label class="f">E-mail<input class="in" type="email" name="email" required autofocus></label>
       <button class="btn btn-pri" style="justify-content:center;padding:11px">Enviar link</button></form>
@@ -480,7 +542,7 @@ function validarSenha(f) {
 
 function viewDefinirSenha(tipo) {
   app().innerHTML = `<div class="auth-wrap"><div class="auth-card">
-    ${logoHtml}<p class="auth-sub">${tipo === 'invite' ? 'Bem-vindo! Crie sua senha de acesso.' : 'Defina sua nova senha.'}</p>
+    ${logoHtml()}<p class="auth-sub">${tipo === 'invite' ? 'Bem-vindo! Crie sua senha de acesso.' : 'Defina sua nova senha.'}</p>
     <form id="f-senha">${formSenhaHtml()}<button class="btn btn-pri" style="justify-content:center;padding:11px">Salvar e entrar</button></form></div></div>`;
   $('#f-senha').onsubmit = async e => {
     e.preventDefault(); const f = e.target; const v = validarSenha(f);
@@ -493,7 +555,7 @@ function viewDefinirSenha(tipo) {
 }
 
 function viewPendente() {
-  app().innerHTML = `<div class="auth-wrap"><div class="auth-card">${logoHtml}
+  app().innerHTML = `<div class="auth-wrap"><div class="auth-card">${logoHtml()}
     <p class="auth-sub">Acesso em configuração</p>
     <div class="msg info">Seu usuário (${esc(S.perfil.email)}) ainda não está vinculado a um cliente. A equipe da Éllu Ambiental fará a liberação em breve.</div>
     <div class="auth-links"><button class="btn-link" id="sair">Sair</button><span>${esc(CFG.CONTATO_EMAIL || '')}</span></div></div></div>`;
@@ -506,7 +568,7 @@ function viewPendente() {
 function viewValidar(codigoInicial = '') {
   const logado = !!S.perfil;
   app().innerHTML = `${demoFlag()}<div class="auth-wrap"><div class="auth-card largo">
-    ${logoHtml}<p class="auth-sub">Validação de Relatório de Ensaio</p>
+    ${logoHtml()}<p class="auth-sub">Validação de Relatório de Ensaio</p>
     <form id="f-val">
       <label class="f">Código de validação <span class="opt">(impresso no relatório)</span>
         <div style="display:flex;gap:8px"><input class="in" name="codigo" placeholder="Ex.: 7F3A9C21B0" style="text-transform:uppercase;font-family:ui-monospace,monospace;letter-spacing:1px" value="${esc(codigoInicial)}" required>
@@ -573,7 +635,7 @@ function ligarDrop(el, onFile, multi = false) {
 function shell(conteudo) {
   const p = S.perfil;
   app().innerHTML = `${demoFlag()}<header class="topbar">
-    <div class="marca">ÉLLU <b>AMBIENTAL</b><small>${isAdmin() ? 'Administração de relatórios' : 'Portal do Cliente'}</small></div>
+    <div class="marca">${LOGO_OK ? `<img src="${esc(LOGO)}" alt="Éllu Ambiental" class="logo-top">` : 'ÉLLU <b>AMBIENTAL</b>'}<small>${isAdmin() ? 'Administração de relatórios' : 'Portal do Cliente'}</small></div>
     <div class="user-menu"><button class="user-btn" id="ub"><span class="avatar">${esc(iniciais(p.nome || p.email))}</span>
       <span class="hide-sm">${esc(p.nome || p.email)}</span>${ic('chev')}</button>
       <div class="dropdown hidden" id="dd">
@@ -847,22 +909,200 @@ async function prepararItens(files, jaNaLista = []) {
 }
 
 /* ---------------------------------------------------------------------
+   Documentos gerais (certificados de calibração) — visíveis a todos os clientes
+   --------------------------------------------------------------------- */
+function validadeBadge(v) {
+  if (!v) return '<span style="color:var(--muted)">—</span>';
+  const dias = Math.round((new Date(v + 'T12:00:00') - new Date(hoje() + 'T12:00:00')) / 86400000);
+  if (dias < 0) return `<span class="badge b-cancelado" title="Venceu em ${fmtData(v)}">Vencido</span><div class="sub">${fmtData(v)}</div>`;
+  if (dias <= 30) return `<span class="badge b-substituido">Vence em ${dias} dia${dias === 1 ? '' : 's'}</span><div class="sub">${fmtData(v)}</div>`;
+  return `<span class="badge b-vigente">Válido</span><div class="sub">até ${fmtData(v)}</div>`;
+}
+
+function docsFiltrados() {
+  const f = S.filtroDoc, q = norm(f.q);
+  return S.documentos.filter(d => (!f.categoria || d.categoria === f.categoria) &&
+    (!q || norm([d.equipamento, d.numero_certificado, d.categoria, d.arquivo_nome].join(' ')).includes(q)));
+}
+
+function docsHtml() {
+  const cats = [...new Set(S.documentos.map(d => d.categoria).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const opt = (v, t) => `<option value="${esc(v)}"${S.filtroDoc.categoria === v ? ' selected' : ''}>${esc(t)}</option>`;
+  return `<div class="card"><div class="toolbar">
+      <div class="busca">${ic('search')}<input class="in" id="fd-q" placeholder="Buscar por equipamento ou nº do certificado…" value="${esc(S.filtroDoc.q)}"></div>
+      ${cats.length > 1 ? `<select class="in" id="fd-cat">${opt('', 'Todas as categorias')}${cats.map(c => opt(c, c)).join('')}</select>` : ''}
+      <button class="btn" id="fd-zip">${ic('download')} Baixar todos (ZIP)</button>
+    </div><div id="lista-docs"></div></div>`;
+}
+
+function ligarDocs() {
+  let t;
+  $('#fd-q').oninput = e => { clearTimeout(t); t = setTimeout(() => { S.filtroDoc.q = e.target.value; renderDocs(); }, 180); };
+  const c = $('#fd-cat'); if (c) c.onchange = () => { S.filtroDoc.categoria = c.value; renderDocs(); };
+  $('#fd-zip').onclick = async e => {
+    const l = docsFiltrados().filter(d => d.ativo !== false); if (!l.length) return toast('Nenhum documento para baixar.', 'erro');
+    await comBotao(e.currentTarget, async () => {
+      try {
+        const zip = new JSZip();
+        for (const d of l) { zip.file(`${safe(d.equipamento)}${extDe(d.arquivo_nome) || '.pdf'}`, await API.blob(d)); API.logDoc(d, 'download'); }
+        baixarBlob(await zip.generateAsync({ type: 'blob' }), `certificados_${hoje()}.zip`);
+      } catch (err) { toast(traduzErro(err), 'erro'); }
+    });
+  };
+  renderDocs();
+}
+
+function renderDocs() {
+  const l = docsFiltrados(), adm = isAdmin();
+  const el = $('#lista-docs'); if (!el) return;
+  el.innerHTML = !l.length
+    ? `<div class="vazio">${ic('file')}<div>${S.documentos.length ? 'Nenhum documento encontrado.' : adm ? 'Nenhum certificado publicado. Clique em “Publicar certificados”.' : 'Nenhum certificado disponível no momento.'}</div></div>`
+    : `<div class="tb-wrap"><table class="tb resp"><thead><tr><th>Equipamento / documento</th><th>Nº do certificado</th><th>Calibração</th><th>Validade</th>${adm ? '<th>Situação</th>' : ''}<th></th></tr></thead><tbody>
+      ${l.map(d => `<tr data-id="${d.id}">
+        <td data-l="Equipamento"><b>${esc(d.equipamento)}</b><div class="sub">${esc(d.categoria || '')}</div></td>
+        <td data-l="Nº certificado">${esc(d.numero_certificado || '—')}</td>
+        <td data-l="Calibração">${fmtData(d.data_calibracao)}</td>
+        <td data-l="Validade">${validadeBadge(d.validade)}</td>
+        ${adm ? `<td data-l="Situação">${d.ativo ? '<span class="badge b-vigente">Visível</span>' : '<span class="badge b-inativo">Oculto</span>'}</td>` : ''}
+        <td class="acoes"><button class="icon-btn" data-d="ver" title="Visualizar">${ic('eye')}</button><button class="icon-btn" data-d="baixar" title="Baixar">${ic('download')}</button>
+          ${adm ? `<button class="icon-btn" data-d="edit" title="Editar / substituir arquivo">${ic('edit')}</button><button class="icon-btn" data-d="del" title="Excluir">${ic('trash')}</button>` : ''}</td>
+      </tr>`).join('')}</tbody></table></div>
+      <div class="paginacao"><span>${l.length} documento${l.length > 1 ? 's' : ''}</span></div>`;
+  $$('#lista-docs tr[data-id]').forEach(tr => {
+    const d = S.documentos.find(x => x.id === tr.dataset.id);
+    $$('[data-d]', tr).forEach(b => b.onclick = async () => {
+      try {
+        if (b.dataset.d === 'ver') {
+          const w = window.open('', '_blank'); const url = await API.abrirUrl(d);
+          if (w) w.location = url; else location.href = url; API.logDoc(d, 'visualizar');
+        } else if (b.dataset.d === 'baixar') {
+          await comBotao(b, async () => { baixarBlob(await API.blob(d), `${safe(d.equipamento)}${extDe(d.arquivo_nome) || '.pdf'}`); API.logDoc(d, 'download'); });
+        } else if (b.dataset.d === 'edit') modalDocumento(d);
+        else if (b.dataset.d === 'del') {
+          if (!await confirmar('Excluir documento', `Excluir <b>${esc(d.equipamento)}</b>? O arquivo será apagado e deixará de aparecer para todos os clientes.<br><br>Para apenas esconder, use <b>Editar → Visível para os clientes</b>.`, 'Excluir', true)) return;
+          await API.excluirDocumento(d); S.documentos = S.documentos.filter(x => x !== d); renderDocs(); toast('Documento excluído.');
+        }
+      } catch (e) { toast(traduzErro(e), 'erro'); }
+    });
+  });
+}
+
+function modalNovosDocumentos() {
+  let itens = [];
+  const cats = [...new Set(['Certificado de calibração', ...S.documentos.map(d => d.categoria).filter(Boolean)])];
+  const m = modal('Publicar certificados', `
+    <div class="msg info">Os documentos publicados aqui ficam disponíveis para <b>todos os clientes</b> na aba “Certificados de calibração”.</div>
+    <label class="f">Categoria<input class="in" id="nd-cat" value="Certificado de calibração" list="dl-cat"><datalist id="dl-cat">${cats.map(c => `<option value="${esc(c)}">`).join('')}</datalist></label>
+    <div class="drop" id="drop-doc">${ic('upload')}<div><b>Arraste os certificados</b> ou clique para selecionar</div><small>Pode enviar vários de uma vez — um registro por arquivo</small><input type="file" hidden></div>
+    <div class="hist" id="nd-lista"></div>`,
+    `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-verde" id="nd-pub">${ic('upload')} Publicar</button>`);
+  const lista = $('#nd-lista', m.el);
+  const render = () => {
+    lista.innerHTML = itens.map((it, i) => `<div class="hist-item" style="flex-direction:column;align-items:stretch" data-i="${i}">
+        <div style="display:flex;justify-content:space-between;gap:8px"><span style="font-size:12px;color:var(--muted);word-break:break-all">${ic('file', 'i i-sm')}${esc(it.file.name)} · ${fmtBytes(it.file.size)}</span>
+          <button type="button" class="icon-btn" data-rm="${i}" title="Remover">${ic('x')}</button></div>
+        <label class="f">Equipamento<input class="in" data-k="equipamento" value="${esc(it.meta.equipamento)}"></label>
+        <div class="grid3"><label class="f">Nº do certificado<input class="in" data-k="numero_certificado" value="${esc(it.meta.numero_certificado || '')}"></label>
+          <label class="f">Data da calibração<input class="in" type="date" data-k="data_calibracao" value="${esc(it.meta.data_calibracao || '')}"></label>
+          <label class="f">Validade<input class="in" type="date" data-k="validade" value="${esc(it.meta.validade || '')}"></label></div>
+      </div>`).join('');
+    $$('[data-i]', lista).forEach(row => {
+      const it = itens[+row.dataset.i];
+      $$('[data-k]', row).forEach(inp => inp.oninput = () => { it.meta[inp.dataset.k] = inp.value; });
+    });
+    $$('[data-rm]', lista).forEach(b => b.onclick = () => { itens.splice(+b.dataset.rm, 1); render(); });
+  };
+  ligarDrop($('#drop-doc', m.el), async files => {
+    for (const f of files) {
+      if (f.size > MAX_ARQ) { toast(`${f.name}: acima de 50 MB.`, 'erro'); continue; }
+      const hash = await sha256(f);
+      if (itens.some(x => x.hash === hash) || S.documentos.some(d => d.hash_sha256 === hash)) { toast(`${f.name} já foi enviado.`, 'erro'); continue; }
+      itens.push({ file: f, hash, meta: { equipamento: f.name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' '), numero_certificado: '', data_calibracao: '', validade: '' } });
+    }
+    render();
+  }, true);
+  $('#nd-pub', m.el).onclick = async e => {
+    if (!itens.length) return toast('Adicione ao menos um arquivo.', 'erro');
+    const categoria = $('#nd-cat', m.el).value.trim() || 'Certificado de calibração';
+    for (const it of itens) if (!it.meta.equipamento.trim()) return toast('Informe o equipamento de todos os arquivos.', 'erro');
+    const payload = itens.map(it => ({ file: it.file, hash: it.hash, meta: { categoria, equipamento: it.meta.equipamento.trim(),
+      numero_certificado: it.meta.numero_certificado.trim() || null, data_calibracao: it.meta.data_calibracao || null, validade: it.meta.validade || null } }));
+    await comBotao(e.currentTarget, async () => {
+      try {
+        const novos = await API.publicarDocumentos(payload);
+        S.documentos = S.documentos.concat(novos).sort((a, b) => (a.categoria + a.equipamento).localeCompare(b.categoria + b.equipamento, 'pt-BR'));
+        m.fechar(); renderDocs(); toast(`${novos.length} documento(s) publicado(s).`, 'ok');
+      } catch (err) { toast(traduzErro(err), 'erro'); }
+    });
+  };
+}
+
+function modalDocumento(d) {
+  let novo = null;
+  const m = modal('Editar documento', `<form id="f-doc" style="display:flex;flex-direction:column;gap:12px">
+      <label class="f">Categoria<input class="in" name="categoria" value="${esc(d.categoria || '')}"></label>
+      <label class="f">Equipamento / documento<input class="in" name="equipamento" value="${esc(d.equipamento)}"></label>
+      <div class="grid3"><label class="f">Nº do certificado<input class="in" name="numero_certificado" value="${esc(d.numero_certificado || '')}"></label>
+        <label class="f">Data da calibração<input class="in" type="date" name="data_calibracao" value="${esc(d.data_calibracao || '')}"></label>
+        <label class="f">Validade<input class="in" type="date" name="validade" value="${esc(d.validade || '')}"></label></div>
+      <label class="chk" style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="ativo"${d.ativo ? ' checked' : ''}> Visível para os clientes</label>
+      <div><div style="font-weight:500;font-size:13px;margin-bottom:4px">Arquivo atual: ${esc(d.arquivo_nome)}</div>
+        <div class="drop" id="drop-sub">${ic('upload')}<div>Arraste um arquivo para <b>substituir</b> (ex.: certificado renovado)</div><input type="file" hidden></div></div>
+    </form>`, `<button class="btn" data-fechar>Cancelar</button><button class="btn btn-pri" id="salvar">Salvar</button>`);
+  const f = $('#f-doc', m.el), drop = $('#drop-sub', m.el);
+  const escolher = async file => {
+    if (file.size > MAX_ARQ) return toast('Arquivo acima de 50 MB.', 'erro');
+    novo = { file, hash: await sha256(file) };
+    drop.classList.add('ok');
+    drop.innerHTML = `${ic('file')}<div><b>${esc(file.name)}</b> · ${fmtBytes(file.size)}</div><small>Substituirá o arquivo atual ao salvar</small><input type="file" hidden>`;
+    ligarDrop(drop, escolher);
+  };
+  ligarDrop(drop, escolher);
+  $('#salvar', m.el).onclick = async e => {
+    if (!f.equipamento.value.trim()) return toast('Informe o equipamento.', 'erro');
+    const patch = { categoria: f.categoria.value.trim() || 'Certificado de calibração', equipamento: f.equipamento.value.trim(),
+      numero_certificado: f.numero_certificado.value.trim() || null, data_calibracao: f.data_calibracao.value || null,
+      validade: f.validade.value || null, ativo: f.ativo.checked };
+    await comBotao(e.currentTarget, async () => {
+      try {
+        const salvo = await API.atualizarDocumento(d, patch, novo);
+        Object.assign(d, salvo); m.fechar(); renderDocs(); toast('Documento atualizado.', 'ok');
+      } catch (err) { toast(traduzErro(err), 'erro'); }
+    });
+  };
+}
+
+/* ---------------------------------------------------------------------
    Área do cliente
    --------------------------------------------------------------------- */
 async function viewCliente() {
-  S.relatorios = await API.relatorios();
+  [S.relatorios, S.documentos] = await Promise.all([API.relatorios(), API.documentos().catch(() => [])]);
   const c = S.perfil.cliente || {};
+  shell(`<div class="page-head"><div><h1>${esc(c.nome || 'Portal do Cliente')}</h1><p>${c.cnpj ? 'CNPJ ' + esc(c.cnpj) : ''}</p></div></div>
+    <nav class="tabs"><button class="tab" data-cli="relatorios">Relatórios de ensaio</button>
+      <button class="tab" data-cli="certificados">Certificados de calibração${S.documentos.length ? ` (${S.documentos.length})` : ''}</button></nav>
+    <div id="aba-cli"></div>`);
+  $$('[data-cli]').forEach(b => b.onclick = () => { S.abaCli = b.dataset.cli; renderAbaCli(); });
+  renderAbaCli();
+}
+
+function renderAbaCli() {
+  $$('[data-cli]').forEach(b => b.classList.toggle('ativo', b.dataset.cli === S.abaCli));
+  const el = $('#aba-cli');
+  if (S.abaCli === 'certificados') {
+    el.innerHTML = `<p style="margin:0 0 14px;color:var(--muted)">Certificados de calibração dos equipamentos utilizados pela Éllu Ambiental nos ensaios.</p>${docsHtml()}`;
+    return ligarDocs();
+  }
   const vig = S.relatorios.filter(r => r.status === 'vigente');
   const ano = String(new Date().getFullYear());
   const ultimo = vig.map(r => r.data_emissao).sort().pop();
-  shell(`<div class="page-head"><div><h1>Relatórios de ensaio</h1><p>${esc(c.nome || '')}${c.cnpj ? ' · CNPJ ' + esc(c.cnpj) : ''}</p></div></div>
-    <div class="stats">
+  el.innerHTML = `<div class="stats">
       <div class="stat"><div class="v">${vig.length}</div><div class="l">Relatórios vigentes</div></div>
       <div class="stat"><div class="v">${vig.filter(r => (r.data_emissao || '').startsWith(ano)).length}</div><div class="l">Emitidos em ${ano}</div></div>
       <div class="stat"><div class="v">${fmtData(ultimo)}</div><div class="l">Última emissão</div></div>
       <div class="stat"><div class="v">${S.relatorios.filter(r => r.status === 'substituido').length}</div><div class="l">Revisões anteriores</div></div>
     </div>
-    <div class="card">${toolbarHtml()}</div>`);
+    <div class="card">${toolbarHtml()}</div>`;
   ligarToolbar(); renderLista();
 }
 
@@ -870,11 +1110,11 @@ async function viewCliente() {
    Área administrativa
    --------------------------------------------------------------------- */
 async function viewAdmin() {
-  [S.relatorios, S.clientes, S.perfis] = await Promise.all([API.relatorios(), API.clientes(), API.perfis()]);
+  [S.relatorios, S.clientes, S.perfis, S.documentos] = await Promise.all([API.relatorios(), API.clientes(), API.perfis(), API.documentos().catch(() => [])]);
   S.filtros.status = S.filtros.status || 'vigente';
   shell(`<div class="page-head"><div><h1>Administração</h1><p>Publicação de relatórios, clientes e acessos</p></div>
       <div id="head-acoes"></div></div>
-    <nav class="tabs">${[['relatorios', 'Relatórios'], ['clientes', 'Clientes'], ['usuarios', 'Usuários'], ['acessos', 'Registro de acessos']]
+    <nav class="tabs">${[['relatorios', 'Relatórios'], ['certificados', 'Certificados'], ['clientes', 'Clientes'], ['usuarios', 'Usuários'], ['acessos', 'Registro de acessos']]
       .map(([k, t]) => `<button class="tab${S.aba === k ? ' ativo' : ''}" data-aba="${k}">${t}</button>`).join('')}</nav>
     <div id="aba"></div>`);
   $$('.tab').forEach(b => b.onclick = () => { S.aba = b.dataset.aba; $$('.tab').forEach(x => x.classList.toggle('ativo', x === b)); renderAba(); });
@@ -888,6 +1128,11 @@ function renderAba() {
     $('#novo-rel').onclick = () => modalPublicar();
     aba.innerHTML = `<div class="card">${toolbarHtml()}</div>`;
     ligarToolbar(); renderLista();
+  } else if (S.aba === 'certificados') {
+    head.innerHTML = `<button class="btn btn-verde" id="novo-doc">${ic('plus')} Publicar certificados</button>`;
+    $('#novo-doc').onclick = () => modalNovosDocumentos();
+    aba.innerHTML = `<p style="margin:0 0 14px;color:var(--muted)">Documentos desta aba ficam visíveis para <b>todos os clientes</b> (ex.: certificados de calibração dos equipamentos).</p>${docsHtml()}`;
+    ligarDocs();
   } else if (S.aba === 'clientes') {
     head.innerHTML = `<button class="btn btn-verde" id="novo-cli">${ic('plus')} Novo cliente</button>`;
     $('#novo-cli').onclick = () => modalCliente();
@@ -952,10 +1197,13 @@ function renderAba() {
     API.acessos().then(log => {
       const usu = id => S.perfis.find(p => p.id === id);
       const rel = id => S.relatorios.find(r => r.id === id);
-      aba.innerHTML = `<div class="card"><div class="tb-wrap"><table class="tb resp"><thead><tr><th>Data/hora</th><th>Usuário</th><th>Cliente</th><th>Relatório</th><th>Ação</th></tr></thead><tbody>
-        ${log.map(l => { const u = usu(l.user_id), r = rel(l.relatorio_id); return `<tr><td data-l="Data/hora">${fmtDataHora(l.created_at)}</td>
+      const docNome = id => { const d = S.documentos.find(x => x.id === id); return d ? `${ic('file', 'i i-sm')}${esc(d.equipamento)}` : 'Documento excluído'; };
+      aba.innerHTML = `<div class="card"><div class="tb-wrap"><table class="tb resp"><thead><tr><th>Data/hora</th><th>Usuário</th><th>Cliente</th><th>Documento</th><th>Ação</th></tr></thead><tbody>
+        ${log.map(l => { const u = usu(l.user_id), r = rel(l.relatorio_id); if (l.documento_id) return `<tr><td data-l="Data/hora">${fmtDataHora(l.created_at)}</td>
+          <td data-l="Usuário">${esc(u?.nome || u?.email || '—')}</td><td data-l="Cliente">${esc(u?.cliente?.nome || '—')}</td>
+          <td data-l="Documento">${docNome(l.documento_id)}</td><td data-l="Ação">${l.acao === 'download' ? 'Download' : 'Visualização'}</td></tr>`; return `<tr><td data-l="Data/hora">${fmtDataHora(l.created_at)}</td>
           <td data-l="Usuário">${esc(u?.nome || u?.email || '—')}</td><td data-l="Cliente">${esc(r?.cliente?.nome || '—')}</td>
-          <td data-l="Relatório">${r ? esc(r.numero) + ' rev. ' + r.revisao : '—'}${(() => { const a = r?.arquivos.find(x => x.id === l.arquivo_id); return a && r.arquivos.length > 1 ? `<div class="sub">${esc(a.arquivo_nome)}</div>` : ''; })()}</td><td data-l="Ação">${l.acao === 'download' ? 'Download' : 'Visualização'}</td></tr>`; }).join('')
+          <td data-l="Documento">${r ? esc(r.numero) + ' rev. ' + r.revisao : '—'}${(() => { const a = r?.arquivos.find(x => x.id === l.arquivo_id); return a && r.arquivos.length > 1 ? `<div class="sub">${esc(a.arquivo_nome)}</div>` : ''; })()}</td><td data-l="Ação">${l.acao === 'download' ? 'Download' : 'Visualização'}</td></tr>`; }).join('')
         || '<tr><td colspan="5" class="vazio">Nenhum acesso registrado ainda.</td></tr>'}</tbody></table></div>
         <div class="paginacao"><span>Últimos ${log.length} registros</span></div></div>`;
     }).catch(e => toast(traduzErro(e), 'erro'));

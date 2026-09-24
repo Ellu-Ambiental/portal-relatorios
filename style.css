@@ -172,3 +172,8 @@ table.tb{width:100%;border-collapse:collapse}
 .demo-flag{background:#fff3cd;color:#7a5a00;text-align:center;font-size:12px;padding:5px}
 
 svg.i.i-sm{width:13px;height:13px;vertical-align:-2px;margin-right:2px}
+
+.logo-login{max-height:72px;max-width:220px;object-fit:contain}
+.topbar .marca{display:flex;align-items:center}
+.logo-top{height:38px;max-width:150px;object-fit:contain;background:#fff;padding:4px 8px;border-radius:6px}
+@media(max-width:760px){.logo-top{height:32px}}

@@ -435,7 +435,7 @@ const app = () => $('#app');
    Inicialização / roteamento
    --------------------------------------------------------------------- */
 async function iniciar() {
-  await logoPronto;
+  await Promise.all([logoPronto, seloPronto]);
   const qs = new URLSearchParams(location.search);
   if (qs.has('validar')) return viewValidar(qs.get('validar'));
 
@@ -475,6 +475,11 @@ async function sair() {
 const LOGO = CFG.LOGO || 'logo.png';
 let LOGO_OK = false;
 const logoPronto = new Promise(res => { const i = new Image(); i.onload = () => { LOGO_OK = true; res(); }; i.onerror = () => res(); i.src = LOGO; setTimeout(res, 3000); });
+const SELO = CFG.SELO || 'selo-acreditacao.png';
+let SELO_OK = false;
+const seloPronto = new Promise(res => { const i = new Image(); i.onload = () => { SELO_OK = true; res(); }; i.onerror = () => res(); i.src = SELO; setTimeout(res, 3000); });
+const seloHtml = (h = 70) => SELO_OK ? `<div class="selo"><img src="${esc(SELO)}" alt="Laboratório acreditado ABNT NBR ISO/IEC 17025 — CRL 1313" style="height:${h}px">
+  <span>Laboratório de ensaios acreditado pela Cgcre/Inmetro<br>ABNT NBR ISO/IEC 17025 · <b>CRL 1313</b></span></div>` : '';
 const logoHtml = () => `<div class="logo">${LOGO_OK ? `<img src="${esc(LOGO)}" alt="Éllu Ambiental" class="logo-login">` : '<span class="marca">ÉLLU <b>AMBIENTAL</b></span>'}</div>`;
 const demoFlag = () => DEMO ? '<div class="demo-flag">Modo demonstração — dados fictícios. Configure o Supabase em <b>config.js</b>.</div>' : '';
 
@@ -493,6 +498,7 @@ function viewLogin({ erro = '', ok = '' } = {}) {
         <button class="btn-link" id="l-esqueci">Esqueci minha senha</button>
         <button class="btn-link" id="l-validar">${ic('shield')} Validar um relatório</button>
       </div>
+      ${seloHtml(64)}
     </div>
     <div class="auth-rodape">Dúvidas ou novo acesso: ${esc(CFG.CONTATO_EMAIL || '')}</div>
   </div></div>`;
@@ -580,6 +586,7 @@ function viewValidar(codigoInicial = '') {
       <input type="file" hidden></div>
     <div id="res-val"></div>
     <div class="auth-links"><button class="btn-link" id="voltar">← ${logado ? 'Voltar ao portal' : 'Ir para o login'}</button></div>
+    ${seloHtml(64)}
   </div></div>`;
   $('#voltar').onclick = () => { history.replaceState(null, '', location.pathname); logado ? entrar() : viewLogin(); };
   const res = $('#res-val');
@@ -1078,7 +1085,7 @@ function modalDocumento(d) {
 async function viewCliente() {
   [S.relatorios, S.documentos] = await Promise.all([API.relatorios(), API.documentos().catch(() => [])]);
   const c = S.perfil.cliente || {};
-  shell(`<div class="page-head"><div><h1>${esc(c.nome || 'Portal do Cliente')}</h1><p>${c.cnpj ? 'CNPJ ' + esc(c.cnpj) : ''}</p></div></div>
+  shell(`<div class="page-head"><div><h1>${esc(c.nome || 'Portal do Cliente')}</h1><p>${c.cnpj ? 'CNPJ ' + esc(c.cnpj) : ''}</p></div>${seloHtml(56)}</div>
     <nav class="tabs"><button class="tab" data-cli="relatorios">Relatórios de ensaio</button>
       <button class="tab" data-cli="certificados">Certificados de calibração${S.documentos.length ? ` (${S.documentos.length})` : ''}</button></nav>
     <div id="aba-cli"></div>`);

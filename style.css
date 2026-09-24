@@ -177,3 +177,10 @@ svg.i.i-sm{width:13px;height:13px;vertical-align:-2px;margin-right:2px}
 .topbar .marca{display:flex;align-items:center}
 .logo-top{height:38px;max-width:150px;object-fit:contain;background:#fff;padding:4px 8px;border-radius:6px}
 @media(max-width:760px){.logo-top{height:32px}}
+
+.selo{display:flex;align-items:center;gap:12px;font-size:11px;color:var(--muted);line-height:1.4}
+.selo img{flex-shrink:0}
+.auth-card .selo{justify-content:center;margin-top:18px;padding-top:16px;border-top:1px solid var(--borda)}
+.page-head .selo{text-align:right;flex-direction:row-reverse}
+@media(max-width:640px){.page-head .selo{display:none}}
+.logo-login{max-height:80px}

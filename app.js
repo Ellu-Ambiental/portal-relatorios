@@ -246,7 +246,20 @@ function SupaAPI() {
       return data;
     },
     async excluirDocumento(d) { ok(await sb.from('documentos_gerais').delete().eq('id', d.id)); await bucket().remove([d.arquivo_path]); },
+    async uso() {
+      const { data, error } = await sb.rpc('uso_armazenamento');
+      if (error) return usoLocal(); // migração v4 ainda não rodada: estima pelos registros
+      return { ...data[0], estimado: false };
+    },
   };
+}
+
+// Estimativa pelo tamanho registrado dos arquivos (quando a função do banco não existe)
+function usoLocal() {
+  const rb = S.relatorios.flatMap(r => r.arquivos).reduce((t, a) => t + (a.tamanho_bytes || 0), 0);
+  const gb = S.documentos.reduce((t, d) => t + (d.tamanho_bytes || 0), 0);
+  return { arquivos_bytes: rb + gb, relatorios_bytes: rb, gerais_bytes: gb,
+    arquivos_qtd: S.relatorios.flatMap(r => r.arquivos).length + S.documentos.length, banco_bytes: null, estimado: true };
 }
 
 // Garante r.arquivos ordenado (e compatibilidade com relatórios de 1 arquivo antes da migração v2)
@@ -415,6 +428,7 @@ function DemoAPI() {
       return clone(alvo);
     },
     async excluirDocumento(d) { docs.splice(docs.findIndex(x => x.id === d.id), 1); },
+    async uso() { const u = usoLocal(); return { ...u, arquivos_bytes: u.arquivos_bytes + 312e6, relatorios_bytes: u.relatorios_bytes + 290e6, gerais_bytes: u.gerais_bytes + 22e6, arquivos_qtd: u.arquivos_qtd + 180, banco_bytes: 27e6, estimado: false }; },
   };
 }
 
@@ -1121,6 +1135,7 @@ async function viewAdmin() {
   S.filtros.status = S.filtros.status || 'vigente';
   shell(`<div class="page-head"><div><h1>Administração</h1><p>Publicação de relatórios, clientes e acessos</p></div>
       <div id="head-acoes"></div></div>
+    <div id="uso"></div>
     <nav class="tabs">${[['relatorios', 'Relatórios'], ['certificados', 'Certificados'], ['clientes', 'Clientes'], ['usuarios', 'Usuários'], ['acessos', 'Registro de acessos']]
       .map(([k, t]) => `<button class="tab${S.aba === k ? ' ativo' : ''}" data-aba="${k}">${t}</button>`).join('')}</nav>
     <div id="aba"></div>`);
@@ -1128,7 +1143,34 @@ async function viewAdmin() {
   renderAba();
 }
 
+const LIM_ARQ = (CFG.LIMITE_ARQUIVOS_MB || 1024) * 1048576;
+const LIM_BANCO = (CFG.LIMITE_BANCO_MB || 500) * 1048576;
+const fmtTam = b => b == null ? '—' : b >= 1073741824 ? (b / 1073741824).toFixed(b >= 10737418240 ? 0 : 1).replace('.', ',') + ' GB'
+  : b >= 1048576 ? Math.round(b / 1048576) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+
+async function renderUso() {
+  const el = $('#uso'); if (!el) return;
+  let u; try { u = await API.uso(); } catch (_) { el.innerHTML = ''; return; }
+  const barra = (usado, lim) => {
+    const p = lim ? Math.min(100, usado / lim * 100) : 0;
+    const cls = p >= 90 ? 'alto' : p >= 70 ? 'medio' : 'ok';
+    return { p, cls, html: `<div class="barra"><i class="${cls}" style="width:${Math.max(p, 1).toFixed(1)}%"></i></div>` };
+  };
+  const a = barra(u.arquivos_bytes, LIM_ARQ), b = u.banco_bytes != null ? barra(u.banco_bytes, LIM_BANCO) : null;
+  const media = u.arquivos_qtd ? u.arquivos_bytes / u.arquivos_qtd : 1.5 * 1048576;
+  const cabem = Math.max(0, Math.floor((LIM_ARQ - u.arquivos_bytes) / media));
+  const pior = Math.max(a.p, b ? b.p : 0);
+  el.innerHTML = `<div class="card uso">
+    <div class="uso-item"><div class="uso-top"><b>${ic('file', 'i i-sm')} Espaço de arquivos</b><span>${fmtTam(u.arquivos_bytes)} de ${fmtTam(LIM_ARQ)} · <b>${a.p.toFixed(0)}%</b></span></div>${a.html}
+      <div class="sub">Relatórios ${fmtTam(u.relatorios_bytes)} · Certificados ${fmtTam(u.gerais_bytes)} · ${u.arquivos_qtd} arquivo${u.arquivos_qtd === 1 ? '' : 's'} · cabem ≈ ${cabem.toLocaleString('pt-BR')} arquivos de ${fmtTam(media)}${u.estimado ? ' · <i>estimativa (rode a migração v4 para o valor exato)</i>' : ''}</div></div>
+    <div class="uso-item"><div class="uso-top"><b>${ic('history', 'i i-sm')} Banco de dados</b><span>${b ? `${fmtTam(u.banco_bytes)} de ${fmtTam(LIM_BANCO)} · <b>${b.p.toFixed(0)}%</b>` : '—'}</span></div>${b ? b.html : '<div class="barra"></div>'}
+      <div class="sub">Dados dos relatórios, clientes, usuários e registro de acessos</div></div>
+    ${pior >= 80 ? `<div class="msg ${pior >= 90 ? 'erro' : 'info'}" style="grid-column:1/-1">Espaço ${pior >= 90 ? 'quase esgotado' : 'acima de 80%'}. Considere passar o Supabase para o plano Pro e depois ajuste <b>LIMITE_ARQUIVOS_MB</b> / <b>LIMITE_BANCO_MB</b> no config.js.</div>` : ''}
+  </div>`;
+}
+
 function renderAba() {
+  renderUso();
   const head = $('#head-acoes'), aba = $('#aba');
   if (S.aba === 'relatorios') {
     head.innerHTML = `<button class="btn btn-verde" id="novo-rel">${ic('plus')} Publicar relatório</button>`;

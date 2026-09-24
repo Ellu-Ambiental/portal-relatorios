@@ -9,5 +9,8 @@ window.PORTAL_CONFIG = {
   // URL pública do portal (usada no link/QR de validação). Vazio = usa a URL atual.
   URL_PUBLICA: "https://ellu-ambiental.github.io/portal-relatorios/",
   ITENS_POR_PAGINA: 25,
+  // Limites do plano Supabase (para o indicador de espaço no admin).
+  // Gratuito: 1024 MB de arquivos / 500 MB de banco. Pro: 102400 / 8192.
+  LIMITE_ARQUIVOS_MB: 1024,
+  LIMITE_BANCO_MB: 500,
 };
- 

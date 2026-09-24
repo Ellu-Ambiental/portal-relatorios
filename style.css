@@ -184,3 +184,12 @@ svg.i.i-sm{width:13px;height:13px;vertical-align:-2px;margin-right:2px}
 .page-head .selo{text-align:right;flex-direction:row-reverse}
 @media(max-width:640px){.page-head .selo{display:none}}
 .logo-login{max-height:80px}
+
+.uso{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:16px 18px;margin-bottom:18px}
+@media(max-width:760px){.uso{grid-template-columns:1fr}}
+.uso-top{display:flex;justify-content:space-between;gap:10px;font-size:13px;margin-bottom:6px;flex-wrap:wrap}
+.uso-top span{color:var(--muted)}
+.uso .sub{color:var(--muted);font-size:12px;margin-top:6px}
+.barra{height:8px;background:#e9edf2;border-radius:99px;overflow:hidden}
+.barra i{display:block;height:100%;border-radius:99px;transition:width .4s}
+.barra i.ok{background:var(--verde)}.barra i.medio{background:#e0a33a}.barra i.alto{background:var(--vermelho)}
